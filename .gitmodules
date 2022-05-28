@@ -3,7 +3,7 @@
 	url = https://gitee.com/aiacLab/pybind11.git
 [submodule "third_party/cutlass"]
 	path = third_party/cutlass
-	url = https://github.com/NVIDIA/cutlass
+	url = https://gitee.com/aiacLab/cutlass
 [submodule "third_party/mp11"]
 	path = third_party/mp11
-	url = https://github.com/boostorg/mp11
+	url = https://gitee.com/aiacLab/mp11
