@@ -16,12 +16,13 @@
 #include <pybind11/pybind11.h>
 // must include pybind11/eigen.h if using eigen matrix as arguments.
 // must include pybind11/stl.h if using containers in STL in arguments.
-#include <algorithm>
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
+#include <algorithm>
 // #include <vector>
-#include <iostream>
 #include <math.h>
+#include <iostream>
+#include <random>
 
 namespace spconv {
 namespace py = pybind11;
@@ -170,6 +171,7 @@ int points_to_voxel_3d_np_mean(
   return voxel_num;
 }
 
+// *NOTE pointcloud to voxel
 template <typename DType, int NDim>
 int points_to_voxel_3d_with_filtering(
     py::array_t<DType> points, py::array_t<DType> voxels,
@@ -180,7 +182,7 @@ int points_to_voxel_3d_with_filtering(
     int max_points, int max_voxels, int block_factor, int block_size,
     DType height_threshold, DType height_high_threshold) {
   auto points_rw = points.template mutable_unchecked<2>();
-  auto mins_rw = mins.template mutable_unchecked<2>();
+  auto mins_rw = mins.template mutable_unchecked<2>(); //* min/max point in pillar
   auto maxs_rw = maxs.template mutable_unchecked<2>();
   auto voxels_rw = voxels.template mutable_unchecked<3>();
   auto voxel_point_mask_rw = voxel_point_mask.template mutable_unchecked<2>();
@@ -198,6 +200,10 @@ int points_to_voxel_3d_with_filtering(
   int c;
   int grid_size[NDim];
 
+  std::mt19937 rng;
+  rng.seed(std::random_device()());
+  std::uniform_real_distribution<double> distribution(0, 1);
+
   DType max_value, min_value;
   for (int i = 0; i < NDim; ++i) {
     grid_size[i] =
@@ -208,7 +214,7 @@ int points_to_voxel_3d_with_filtering(
   int voxelidx, num;
   int block_coor[2];
   int startx, stopx, starty, stopy;
-  for (int i = 0; i < N; ++i) {
+  for (int i = 0; i < N; ++i) {  // 遍历N个点
     failed = false;
     for (int j = 0; j < NDim; ++j) {
       c = floor((points_rw(i, j) - coors_range[j]) / voxel_size[j]);
@@ -232,9 +238,15 @@ int points_to_voxel_3d_with_filtering(
       }
     }
     num = num_points_per_voxel_rw(voxelidx);
-    if (num < max_points) {
+    if (num < max_points) {  // 每个voxel数量不超过max_points
+      // TODO 从距离小于30m的voxel中随机选择丢弃点
+      if (sqrt(pow((double)points_rw(i, 0), 2) + pow((double)points_rw(i, 1), 2) +
+               pow((double)points_rw(i, 2), 2)) <= 30) {  // 与车的距离
+        if (distribution(rng) > 0.1)  // 均匀分布，大于0.1为未选中
+          continue;
+      }
       voxel_point_mask_rw(voxelidx, num) = DType(1);
-      for (int k = 0; k < num_features; ++k) {
+      for (int k = 0; k < num_features; ++k) {  // n=4
         voxels_rw(voxelidx, num, k) = points_rw(i, k);
       }
       block_coor[0] = coor[1] / block_factor;
@@ -244,6 +256,22 @@ int points_to_voxel_3d_with_filtering(
       maxs_rw(block_coor[0], block_coor[1]) =
           std::max(points_rw(i, 2), maxs_rw(block_coor[0], block_coor[1]));
       num_points_per_voxel_rw(voxelidx) += 1;
+    } else {
+      // TODO 从距离小于30m的voxel中随机替换点
+      if (sqrt(pow((double)points_rw(i, 0), 2) + pow((double)points_rw(i, 1), 2) +
+               pow((double)points_rw(i, 2), 2)) <= 30) {  // 与车的距离
+        if (distribution(rng) > 0.5)  // 均匀分布，大于0.1为未选中
+          continue;
+        for (int k = 0; k < num_features; ++k) {  // n=4
+          voxels_rw(voxelidx, num, k) = points_rw(i, k);
+        }
+        block_coor[0] = coor[1] / block_factor;
+        block_coor[1] = coor[2] / block_factor;
+        mins_rw(block_coor[0], block_coor[1]) =
+            std::min(points_rw(i, 2), mins_rw(block_coor[0], block_coor[1]));
+        maxs_rw(block_coor[0], block_coor[1]) =
+            std::max(points_rw(i, 2), maxs_rw(block_coor[0], block_coor[1]));
+      }
     }
   }
   for (int i = 0; i < voxel_num; ++i) {
@@ -261,12 +289,14 @@ int points_to_voxel_3d_with_filtering(
     stopy =
         std::min(block_shape_W, block_coor[1] + block_size - block_size / 2);
 
+    // 取voxel中的高度最值
     for (int j = startx; j < stopx; ++j) {
       for (int k = starty; k < stopy; ++k) {
         min_value = std::min(min_value, mins_rw(j, k));
         max_value = std::max(max_value, maxs_rw(j, k));
       }
     }
+    // 根据高度过滤voxel
     voxel_mask_rw(i) = ((max_value - min_value) > height_threshold) &&
                        ((max_value - min_value) < height_high_threshold);
   }
